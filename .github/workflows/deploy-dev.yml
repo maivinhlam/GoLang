@@ -1,0 +1,114 @@
+name: Deploy backend to Mapper Dev
+
+on: [workflow_dispatch]
+
+env:
+  AWS_REGION: us-west-2
+  ENV: dev
+  ECR_APP_REPOSITORY: mapper-dev-v2-application
+  ECS_SERVICE: mapper
+  ECS_CLUSTER: mapper-dev-v2-cluster
+  ECS_TASK_DEFINITION_NAME: mapper
+  ECS_FULLDATA_TASK_DEFINITION_JSON_PATH: fulldata-task-definition.json
+  ECS_TASK_DEFINITION_JSON_PATH: task-definition.json
+  APP_CONTAINER_NAME: application
+  SSM_PATH: /backend/mapper-dev/env
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: develop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1.5.10
+        with:
+          aws-access-key-id: ${{ secrets.MAPPER_DEV_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.MAPPER_DEV_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1.3.3
+
+      - uses: deptno/action-aws-ssm-to-dotenv@v1.3.2
+        name: Make env file
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MAPPER_DEV_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MAPPER_DEV_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION}}
+        with:
+          ssm-path: ${{ env.SSM_PATH }}
+          format: dotenv
+          output: .env
+        
+      - name: Build executable files
+        run: |
+          cat .env
+          cp .env ./cmd/.env
+          make docker
+          ls -al ./cmd
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build a docker container and
+          # push it to ECR so that it can
+          # be deployed to ECS.
+          
+          cp -r ci/github/* .
+          docker-compose build
+          ls -al .
+          echo "Push application image"
+          docker tag $APP_CONTAINER_NAME:latest $ECR_REGISTRY/$ECR_APP_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_APP_REPOSITORY:latest
+          docker tag $APP_CONTAINER_NAME:latest $ECR_REGISTRY/$ECR_APP_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_APP_REPOSITORY:$IMAGE_TAG
+          echo "application_image=$ECR_REGISTRY/$ECR_APP_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download and Edit task definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_NAME }} --query taskDefinition > ${{ env.ECS_FULLDATA_TASK_DEFINITION_JSON_PATH }}
+          cat ${{ env.ECS_FULLDATA_TASK_DEFINITION_JSON_PATH }} | jq 'del(.compatibilities,.taskDefinitionArn,.requiresAttributes,.revision,.status,.registeredAt,.registeredBy,.runtimePlatform)' > ${{ env.ECS_TASK_DEFINITION_JSON_PATH }}
+
+      - name: Fill in the new image ID for application container in the Amazon ECS task definition
+        id: render-app-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1.0.22
+        with:
+          task-definition: ${{ env.ECS_TASK_DEFINITION_JSON_PATH }}
+          container-name: ${{ env.APP_CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.application_image }}
+      
+      - name: Debug task definition
+        run: |
+          cat ${{ steps.render-app-container.outputs.task-definition }}
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1.4.10
+        with:
+          task-definition: ${{ steps.render-app-container.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+  notify:
+    if: always()
+    name: Post Workflow Status To Slack
+    needs:
+      - deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack Workflow Notification
+        uses: Gamesight/slack-workflow-status@master
+        with:
+          repo_token: ${{secrets.TOKEN_NOTIFY}}
+          slack_webhook_url: ${{secrets.SLACK_WEBHOOK_URL}}
+          name: 'Build Mapper Dev'
+          icon_emoji: ':octocat:'

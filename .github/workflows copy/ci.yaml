@@ -1,0 +1,103 @@
+name: CI
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::656854603944:role/utm-ms-dev-github-oidc-role
+          aws-region: us-west-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          DOCKER_BUILDKIT: 1
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          GIT_ACCESS_KEY: ${{ secrets.GIT_ACCESS_KEY }}
+        run: |
+          NAMES=( "utm-registration" )
+          NAMES+=( "utm-registration-publisher" )
+          NAMES+=( "utm-planning" )
+          NAMES+=( "utm-planning-publisher" )
+          NAMES+=( "utm-operation" )
+          NAMES+=( "utm-operation-publisher" )
+          NAMES+=( "utm-airspace" )
+          NAMES+=( "utm-airspace-publisher" )
+          NAMES+=( "utm-syncer-grpc" )
+          NAMES+=( "utm-syncer-consumer" )
+          NAMES+=( "utm-planning-consumer" )
+          NAMES+=( "utm-operation-consumer" )
+          NAMES+=( "utm-airspace-consumer" )
+          NAMES+=( "utm-registration-consumer" )
+          NAMES+=( "utm-migration" )
+          NAMES+=( "utm-seeder" )
+          PATHS=( "containers/registration/production/Dockerfile" )
+          PATHS+=( "containers/publisher/registration/production/Dockerfile" )
+          PATHS+=( "containers/planning/production/Dockerfile" )
+          PATHS+=( "containers/publisher/planning/production/Dockerfile" )
+          PATHS+=( "containers/operation/production/Dockerfile" )
+          PATHS+=( "containers/publisher/operation/production/Dockerfile" )
+          PATHS+=( "containers/airspace/production/Dockerfile" )
+          PATHS+=( "containers/publisher/airspace/production/Dockerfile" )
+          PATHS+=( "containers/syncer/production/Dockerfile" )
+          PATHS+=( "containers/consumer/syncer/production/Dockerfile" )
+          PATHS+=( "containers/consumer/planning/production/Dockerfile" )
+          PATHS+=( "containers/consumer/operation/production/Dockerfile" )
+          PATHS+=( "containers/consumer/airspace/production/Dockerfile" )
+          PATHS+=( "containers/consumer/registration/production/Dockerfile" )
+          PATHS+=( "containers/migration/Dockerfile" )
+          PATHS+=( "containers/seeder/Dockerfile" )
+          for i in "${!NAMES[@]}"
+          do
+            docker build -t $ECR_REGISTRY/${NAMES[$i]}:${IMAGE_TAG} -f ${PATHS[$i]} .
+            if  !(docker push $ECR_REGISTRY/${NAMES[$i]}:${IMAGE_TAG})
+            then
+              echo "Fail to push $ECR_REGISTRY/${NAMES[$i]}:${IMAGE_TAG}"
+            fi
+          done
+          
+          GITS=( "utm-registration" )
+          GITS+=( "utm-planning" )
+          GITS+=( "utm-operation" )
+          GITS+=( "utm-airspace" )
+          GITS+=( "utm-syncer-grpc" )
+          GITS+=( "utm-syncer-consumer" )
+          GITS+=( "utm-planning-consumer" )
+          GITS+=( "utm-operation-consumer" )
+          GITS+=( "utm-airspace-consumer" )
+          GITS+=( "utm-registration-consumer" )
+          GITS+=( "utm-migration" )
+          GITS+=( "utm-seeder" )
+          sudo apt-get install -y git
+          git --version
+          git clone https://${GIT_ACCESS_KEY}@github.com/TerraDrone/utm-deployment.git
+          cd utm-deployment
+          for i in "${GITS[@]}"
+          do           
+            name=$(echo "$i"|sed "s/utm-//")
+            if  !(sed -i "s/newTag: .*/newTag: "${IMAGE_TAG}"/g" ./applications/$name/overlays/dev/kustomization.yaml)
+            then
+              echo "Fail to edit $i"
+            fi
+          done
+          git config user.name "github-ci"
+          git config user.email "github-ci@terra-drone.co.jp"
+          git add .
+          git commit -m "Upgraded with the tag ${IMAGE_TAG}"
+          git push

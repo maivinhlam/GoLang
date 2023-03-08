@@ -1,0 +1,60 @@
+name: Test on Push
+on: [workflow_dispatch]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Code
+        uses: actions/checkout@v2
+
+      - name: Set up Go 1.17
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+
+      - name: Cache go modules
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: start db
+        run: make docker-up-db
+        env:
+          KAFKA_HOST: localhost
+
+      - name: Get Dependencies
+        run: make install-tools
+
+      - name: Wait DynamoDB
+        run: bin/wait-for-it.sh localhost:8000 -- echo "DynamoDB is up"
+
+      - name: Wait PostgreSQL
+        run: bin/wait-for-it.sh localhost:5432 -- echo "Postgres is up"
+
+      - name: Initialize DynamoDB
+        run: make init-db
+        env:
+          DYNAMO_ENDPOINT: http://localhost:8000
+          AWS_ACCESS_KEY_ID: local
+          AWS_SECRET_ACCESS_KEY: local
+          GOLANG_PROTOBUF_REGISTRATION_CONFLICT: warn
+      - name: Install modules
+        run: make install
+
+      - name: Test code
+        run: make test
+        env:
+          KAFKA_HOST: localhost
+          DYNAMO_ENDPOINT: http://localhost:8000
+          AWS_ACCESS_KEY_ID: local
+          AWS_SECRET_ACCESS_KEY: local
+          KAFKA_BROKERS: localhost:9092
+          GOLANG_PROTOBUF_REGISTRATION_CONFLICT: warn

@@ -24,6 +24,7 @@ require (
 
 require (
 	github.com/lestrrat-go/jwx v1.2.27
+	github.com/notnil/chess v1.9.0
 	github.com/xuri/excelize/v2 v2.8.0
 	golang.org/x/text v0.14.0 // indirect
 )

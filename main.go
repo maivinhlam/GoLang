@@ -1,64 +1,41 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"log"
-	"os"
-
-	"github.com/xuri/excelize/v2"
 )
 
 func main() {
-	f, err := excelize.OpenFile("dict.xlsx")
-	if err != nil {
-		fmt.Println(err)
-		return
+	nums := []int{0, 0, 1, 1, 1, 2, 2, 3, 3, 4}
+	k := containsDuplicate(nums)
+	log.Println(nums)
+	log.Println(k)
+
+}
+func singleNumber(nums []int) int {
+	m := map[int]int{}
+	for _, v := range nums {
+		m[v] = m[v] + 1
 	}
 
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Println(err)
+	for i, v := range m {
+		if v == 1 {
+			return i
 		}
-	}()
-	maps := make(map[string][][]string, 0)
-
-	// could have multiple sheets
-	sheets := f.GetSheetList()
-	for _, sheetName := range sheets {
-		d, err := f.GetRows(sheetName)
-		if err != nil {
-			fmt.Println("error reading sheet", sheetName, ":", err)
-			return
-		}
-		maps[sheetName] = d
 	}
-	saveAsJSON(maps, "dict.json")
+	return nums[0]
 }
 
-func saveAsJSON(data interface{}, filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	empty := ""
-	tab := "\t"
-
-	buffer := new(bytes.Buffer)
-	encoder := json.NewEncoder(buffer)
-	encoder.SetIndent(empty, tab)
-
-	err = encoder.Encode(data)
-	if err != nil {
-		return err
+func containsDuplicate(nums []int) bool {
+	m := map[int]int{}
+	for _, v := range nums {
+		m[v] = m[v] + 1
 	}
 
-	log.Println(buffer.String())
+	for _, v := range m {
+		if v > 1 {
+			return true
+		}
+	}
 
-	file.WriteString(buffer.String())
-	return nil
-
+	return false
 }
